@@ -6,3 +6,6 @@ tensorboard
 scipy
 calflops
 transformers
+opencv-python
+tqdm
+scikit-learn

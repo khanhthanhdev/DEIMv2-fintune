@@ -60,7 +60,9 @@ coverage.xml
 # Translations
 *.mo
 *.pot
-
+.zip
+public_test/
+train/
 # Django stuff:
 local_settings.py
 db.sqlite3
