@@ -44,7 +44,7 @@ python tools/dataset/extract_frames.py \
 
 This script prefers FFmpeg when it is available (install from `apt install ffmpeg` or your platform package manager) and falls back to OpenCV otherwise. It records each video in `samples/<video>/frames/frame_000001.jpg` etc.
 
-Now run the converter. Because `/home/25thanh.tk/DEIMv2/train/frames/<video>/` exists, `convert_drone_dataset.py` will copy images from that shared root instead of reading the MP4 files. Pass the new `--global_frames_root` flag so it knows where to look.
+Now run the converter. Because `/home/25thanh.tk/DEIMv2/train/frames/<video>/` exists, `convert_drone_dataset.py` will copy images from that shared root instead of reading the MP4 files; `--global_frames_root` is optional because the converter now falls back to `<input_dir>/frames` by default.
 
 This extracts only the annotated frames and creates `instances.json` with 7 categories. The converter is flexible about the input JSON shape: it accepts either a list of video records (the expected format) or a dictionary that contains such a list (e.g., under `videos`, `records`, etc.).
 
@@ -52,8 +52,7 @@ This extracts only the annotated frames and creates `instances.json` with 7 cate
 python tools/dataset/convert_drone_dataset.py \
   --input_dir /home/25thanh.tk/DEIMv2/train \
   --output_dir coco_dataset/coco_dataset \
-  --overwrite \
-  --global_frames_root /home/25thanh.tk/DEIMv2/train/frames
+  --overwrite
 ```
 
 Key features:

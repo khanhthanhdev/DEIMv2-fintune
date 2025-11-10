@@ -251,7 +251,7 @@ def main() -> None:
     frames_root = (
         Path(args.global_frames_root).expanduser().resolve()
         if args.global_frames_root
-        else None
+        else input_dir / "frames"
     )
 
     with open(annotations_path, "r") as f:

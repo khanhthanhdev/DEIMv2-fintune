@@ -26,13 +26,12 @@ Your drone dataset should be organized as:
 
 **Verify your data:**
 ```bash
-# Check if data directory exists
+
 ls -la /home/25thanh.tk/DEIMv2/train/
 
-# Count frame files
+
 find /home/25thanh.tk/DEIMv2/train/samples/ -name "*.jpg" | wc -l
 
-# Check annotations file
 ls -la /home/25thanh.tk/DEIMv2/train/annotations/annotations.json
 ```
 
