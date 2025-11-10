@@ -32,19 +32,19 @@ pip install -r requirements.txt
 
 ## Step 2 — Extract Frames + Convert the Training Split
 
-First extract all frames from the drone videos. This ensures the converter can copy images from `samples/<video>/frames/` instead of re-reading the MP4 files (useful when OpenCV cannot decode your codec).
+First extract all frames from the drone videos. The extractor will write them into `/home/25thanh.tk/DEIMv2/train/frames/<video>/frame_*.jpg`, so the converter can simply copy the JPEGs instead of re-decoding the MP4 files (important when OpenCV struggles with the drone codec).
 
 ```bash
 python tools/dataset/extract_frames.py \
   --input_dir /home/25thanh.tk/DEIMv2/train \
-  --frames_dir frames \
+  --output_root /home/25thanh.tk/DEIMv2/train/frames \
   --skip_existing \
   --verbose
 ```
 
 This script prefers FFmpeg when it is available (install from `apt install ffmpeg` or your platform package manager) and falls back to OpenCV otherwise. It records each video in `samples/<video>/frames/frame_000001.jpg` etc.
 
-Now run the converter. Because the frames directory exists, `convert_drone_dataset.py` will copy frames instead of re-decoding.
+Now run the converter. Because `/home/25thanh.tk/DEIMv2/train/frames/<video>/` exists, `convert_drone_dataset.py` will copy images from that shared root instead of reading the MP4 files. Pass the new `--global_frames_root` flag so it knows where to look.
 
 This extracts only the annotated frames and creates `instances.json` with 7 categories. The converter is flexible about the input JSON shape: it accepts either a list of video records (the expected format) or a dictionary that contains such a list (e.g., under `videos`, `records`, etc.).
 
@@ -52,7 +52,8 @@ This extracts only the annotated frames and creates `instances.json` with 7 cate
 python tools/dataset/convert_drone_dataset.py \
   --input_dir /home/25thanh.tk/DEIMv2/train \
   --output_dir coco_dataset/coco_dataset \
-  --overwrite
+  --overwrite \
+  --global_frames_root /home/25thanh.tk/DEIMv2/train/frames
 ```
 
 Key features:

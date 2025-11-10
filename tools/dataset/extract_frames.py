@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--frames_dir",
         default="frames",
-        help="Name given to the generated frames folder inside each sample.",
+        help="Name used when storing frames inside a sample (only with --per_sample).",
     )
     parser.add_argument(
         "--fps",
@@ -71,6 +71,15 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Show informational logs during extraction.",
+    )
+    parser.add_argument(
+        "--output_root",
+        help="Directory where all extracted frames are stored (default: <input_dir>/frames).",
+    )
+    parser.add_argument(
+        "--per_sample",
+        action="store_true",
+        help="Store frames inside each sample instead of a shared root directory.",
     )
     return parser.parse_args()
 
@@ -158,6 +167,8 @@ def extract_with_ffmpeg(video_path: Path, dest_dir: Path, fps: Optional[float]) 
 def extract_frames_for_sample(
     sample_dir: Path,
     video_name: str,
+    dest_root: Path,
+    per_sample: bool,
     frames_dir: str,
     force_opencv: bool,
     fps: Optional[float],
@@ -170,7 +181,8 @@ def extract_frames_for_sample(
         else:
             raise FileNotFoundError(f"No video file found in {sample_dir}")
 
-    dest_dir = sample_dir / frames_dir
+    dest_subdir = sample_dir / frames_dir if per_sample else dest_root / sample_dir.name
+    dest_dir = dest_subdir
     ffmpeg_available = shutil.which("ffmpeg") is not None and not force_opencv
     if ffmpeg_available:
         return extract_with_ffmpeg(video_path, dest_dir, fps)
@@ -190,6 +202,12 @@ def main() -> None:
     if args.max_videos:
         samples = samples[: args.max_videos]
 
+    frames_root = (
+        Path(args.output_root).expanduser().resolve()
+        if args.output_root
+        else root / "frames"
+    )
+
     extracted_videos = 0
     for sample_dir in samples:
         if args.skip_existing and has_frames(sample_dir, args.frames_dir):
@@ -200,6 +218,8 @@ def main() -> None:
             count, frames = extract_frames_for_sample(
                 sample_dir,
                 args.video_name,
+                frames_root,
+                args.per_sample,
                 args.frames_dir,
                 args.use_opencv,
                 args.fps,

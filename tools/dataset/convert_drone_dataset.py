@@ -5,7 +5,8 @@ Convert the custom drone dataset (videos + frame-level annotations) to COCO form
 Example:
     python tools/dataset/convert_drone_dataset.py \
         --input_dir /home/25thanh.tk/DEIMv2/train \
-        --output_dir coco_dataset/coco_dataset
+        --output_dir coco_dataset/coco_dataset \
+        --global_frames_root /home/25thanh.tk/DEIMv2/train/frames
 """
 
 from __future__ import annotations
@@ -47,6 +48,10 @@ def parse_args() -> argparse.Namespace:
         "--frame_dir_name",
         default="frames",
         help="Folder name that may contain pre-extracted frames inside each sample.",
+    )
+    parser.add_argument(
+        "--global_frames_root",
+        help="Optional root directory containing pre-extracted frames for all videos.",
     )
     parser.add_argument(
         "--image_extension",
@@ -243,6 +248,11 @@ def main() -> None:
         raise FileNotFoundError(f"Samples directory not found: {samples_dir}")
     if not annotations_path.exists():
         raise FileNotFoundError(f"Annotations file not found: {annotations_path}")
+    frames_root = (
+        Path(args.global_frames_root).expanduser().resolve()
+        if args.global_frames_root
+        else None
+    )
 
     with open(annotations_path, "r") as f:
         raw_annotations = json.load(f)
@@ -294,15 +304,21 @@ def main() -> None:
         video_id = record["video_id"]
         sample_dir = samples_dir / video_id
         video_path = find_video_file(sample_dir, args.video_filename)
-        frames_dir = sample_dir / args.frame_dir_name
-        if video_path is None and not frames_dir.exists():
+        sample_frames_dir = sample_dir / args.frame_dir_name
+        global_frames_dir = (
+            frames_root / video_id if frames_root else None
+        )
+        if global_frames_dir and not global_frames_dir.exists():
+            global_frames_dir = None
+        frames_dir = sample_frames_dir if sample_frames_dir.exists() else global_frames_dir
+        if video_path is None and not frames_dir:
             print(f"[WARN] No video or frames directory found for {video_id}, skipping.")
             continue
 
         frames_needed = gather_frames(record)
         frame_metadata = extract_frames(
             video_path,
-            frames_dir if frames_dir.exists() else None,
+            frames_dir,
             frames_needed,
             out_images_root,
             video_id,

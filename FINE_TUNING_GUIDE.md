@@ -45,6 +45,7 @@ cd /home/25thanh.tk/DEIMv2-finetune/
 
 python tools/dataset/extract_frames.py \
     --input_dir /home/25thanh.tk/DEIMv2/train \
+    --output_root /home/25thanh.tk/DEIMv2/train/frames \
     --skip_existing
 ```
 
@@ -55,6 +56,7 @@ python tools/dataset/convert_drone_dataset.py \
     --input_dir /home/25thanh.tk/DEIMv2/train \
     --output_dir coco_dataset \
     --overwrite
+    --global_frames_root /home/25thanh.tk/DEIMv2/train/frames
 ```
 
 **Expected output:**
