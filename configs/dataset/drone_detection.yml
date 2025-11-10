@@ -4,15 +4,20 @@ evaluator:
   type: CocoEvaluator
   iou_types: ['bbox', ]
 
-num_classes: 1  # Single class: target_object
+num_classes: 7  # 7 training object classes for ground object detection
 remap_mscoco_category: False
 
 train_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /path/to/your/coco_dataset/images
-    ann_file: /path/to/your/coco_dataset/annotations/instances_train.json
+    # After running tools/dataset/convert_drone_dataset.py and tools/dataset/split_dataset.py
+    # the converter produces a `coco_dataset/` folder with `images/` and `annotations/`.
+    # Then `split_dataset.py` will create `<coco_dataset>_train/` and `<coco_dataset>_val/`.
+    # Set these paths to the output of the conversion/split step. Example below uses
+    # the project-local `coco_dataset` location.
+    img_folder: /home/thanhkt/DEIMv2-fintune/coco_dataset/coco_dataset_train/images
+    ann_file: /home/thanhkt/DEIMv2-fintune/coco_dataset/coco_dataset_train/annotations/instances_train.json
     return_masks: False
     transforms:
       type: Compose
@@ -27,8 +32,9 @@ val_dataloader:
   type: DataLoader
   dataset:
     type: CocoDetection
-    img_folder: /path/to/your/coco_dataset/images
-    ann_file: /path/to/your/coco_dataset/annotations/instances_val.json
+    # Validation split created by tools/dataset/split_dataset.py
+    img_folder: /home/thanhkt/DEIMv2-fintune/coco_dataset/coco_dataset_val/images
+    ann_file: /home/thanhkt/DEIMv2-fintune/coco_dataset/coco_dataset_val/annotations/instances_val.json
     return_masks: False
     transforms:
       type: Compose
