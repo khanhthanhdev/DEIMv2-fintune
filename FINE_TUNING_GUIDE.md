@@ -36,22 +36,30 @@ find /home/25thanh.tk/DEIMv2/train/samples/ -name "*.jpg" | wc -l
 ls -la /home/25thanh.tk/DEIMv2/train/annotations/annotations.json
 ```
 
-## Step 2: Convert Dataset to COCO Format
+## Step 2: Extract Frames & Convert Dataset to COCO Format
 
-Navigate to your project directory and run the conversion:
+Extract all annotated frames first so that the converter can reuse the JPGs instead of decoding the MP4s on-the-fly:
 
 ```bash
 cd /home/25thanh.tk/DEIMv2-finetune/
 
-# Convert drone dataset to COCO format
+python tools/dataset/extract_frames.py \
+    --input_dir /home/25thanh.tk/DEIMv2/train \
+    --skip_existing
+```
+
+Now run the converter. It will detect the freshly created `frames/` folders and copy images instead of re-reading the videos.
+
+```bash
 python tools/dataset/convert_drone_dataset.py \
     --input_dir /home/25thanh.tk/DEIMv2/train \
-    --output_dir coco_dataset
+    --output_dir coco_dataset \
+    --overwrite
 ```
 
 **Expected output:**
 - Creates `coco_dataset/coco_dataset/` directory
-- Extracts frames from videos at annotated timestamps
+- Copies the extracted frames into the COCO `images/` directory
 - Converts annotations to COCO format
 - Shows conversion statistics
 

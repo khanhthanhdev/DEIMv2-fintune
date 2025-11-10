@@ -245,9 +245,31 @@ def main() -> None:
         raise FileNotFoundError(f"Annotations file not found: {annotations_path}")
 
     with open(annotations_path, "r") as f:
-        annotations_data = json.load(f)
-    if not isinstance(annotations_data, list):
-        raise ValueError("annotations.json should contain a list of video records.")
+        raw_annotations = json.load(f)
+
+    if isinstance(raw_annotations, list):
+        annotations_data = raw_annotations
+    elif isinstance(raw_annotations, dict):
+        if raw_annotations.get("video_id"):
+            annotations_data = [raw_annotations]
+        else:
+            candidate = None
+            for value in raw_annotations.values():
+                if (
+                    isinstance(value, list)
+                    and value
+                    and isinstance(value[0], dict)
+                    and value[0].get("video_id")
+                ):
+                    candidate = value
+                    break
+            if candidate is None:
+                raise ValueError(
+                    "annotations.json should contain a list of video records or a dict with such a list."
+                )
+            annotations_data = candidate
+    else:
+        raise ValueError("annotations.json must be a list or dict containing video records.")
 
     if args.max_videos:
         annotations_data = annotations_data[: args.max_videos]

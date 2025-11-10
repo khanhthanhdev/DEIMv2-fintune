@@ -30,9 +30,23 @@ All scripts rely on OpenCV, tqdm, PyYAML, and `ruamel.yaml`:
 pip install -r requirements.txt
 ```
 
-## Step 2 — Convert the Training Split to COCO
+## Step 2 — Extract Frames + Convert the Training Split
 
-This extracts only the annotated frames and creates `instances.json` with 7 categories:
+First extract all frames from the drone videos. This ensures the converter can copy images from `samples/<video>/frames/` instead of re-reading the MP4 files (useful when OpenCV cannot decode your codec).
+
+```bash
+python tools/dataset/extract_frames.py \
+  --input_dir /home/25thanh.tk/DEIMv2/train \
+  --frames_dir frames \
+  --skip_existing \
+  --verbose
+```
+
+This script prefers FFmpeg when it is available (install from `apt install ffmpeg` or your platform package manager) and falls back to OpenCV otherwise. It records each video in `samples/<video>/frames/frame_000001.jpg` etc.
+
+Now run the converter. Because the frames directory exists, `convert_drone_dataset.py` will copy frames instead of re-decoding.
+
+This extracts only the annotated frames and creates `instances.json` with 7 categories. The converter is flexible about the input JSON shape: it accepts either a list of video records (the expected format) or a dictionary that contains such a list (e.g., under `videos`, `records`, etc.).
 
 ```bash
 python tools/dataset/convert_drone_dataset.py \
