@@ -1,66 +1,89 @@
 #!/usr/bin/env python3
 """
-Update dataset paths in drone_detection.yml
+Update dataset paths inside configs/dataset/drone_detection.yml.
 
-Usage:
-    python update_dataset_paths.py --train_dir /path/to/train --val_dir /path/to/val
+Example:
+    python tools/dataset/update_dataset_paths.py \
+        --train_dir coco_dataset/coco_dataset_train \
+        --val_dir coco_dataset/coco_dataset_val
 """
 
+from __future__ import annotations
+
 import argparse
-import yaml
 from pathlib import Path
 
-
-def update_dataset_config(train_dir, val_dir, config_file='configs/dataset/drone_detection.yml'):
-    """Update the dataset paths in the drone detection config"""
-
-    # Read the config file
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
-
-    # Update train paths
-    if train_dir:
-        train_images = Path(train_dir) / "images"
-        train_annotations = Path(train_dir) / "annotations" / "instances_train.json"
-
-        config['train_dataloader']['dataset']['img_folder'] = str(train_images)
-        config['train_dataloader']['dataset']['ann_file'] = str(train_annotations)
-
-    # Update val paths
-    if val_dir:
-        val_images = Path(val_dir) / "images"
-        val_annotations = Path(val_dir) / "annotations" / "instances_val.json"
-
-        config['val_dataloader']['dataset']['img_folder'] = str(val_images)
-        config['val_dataloader']['dataset']['ann_file'] = str(val_annotations)
-
-    # Write back the updated config
-    with open(config_file, 'w') as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-
-    print(f"Updated {config_file}")
-    if train_dir:
-        print(f"Train images: {config['train_dataloader']['dataset']['img_folder']}")
-        print(f"Train annotations: {config['train_dataloader']['dataset']['ann_file']}")
-    if val_dir:
-        print(f"Val images: {config['val_dataloader']['dataset']['img_folder']}")
-        print(f"Val annotations: {config['val_dataloader']['dataset']['ann_file']}")
+from ruamel.yaml import YAML
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Update dataset paths in drone_detection.yml")
-    parser.add_argument("--train_dir", help="Path to training dataset directory")
-    parser.add_argument("--val_dir", help="Path to validation dataset directory")
-    parser.add_argument("--config_file", default="configs/dataset/drone_detection.yml",
-                       help="Path to config file to update")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Update dataset paths in the drone config.")
+    parser.add_argument(
+        "--train_dir",
+        required=True,
+        help="Train split directory containing images/ and annotations/instances_train.json.",
+    )
+    parser.add_argument(
+        "--val_dir",
+        required=True,
+        help="Validation split directory containing images/ and annotations/instances_val.json.",
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/dataset/drone_detection.yml",
+        help="Path to the dataset configuration file to update.",
+    )
+    return parser.parse_args()
 
-    args = parser.parse_args()
 
-    if not args.train_dir and not args.val_dir:
-        print("Error: Must provide at least --train_dir or --val_dir")
-        return
+def validate_split(split_dir: Path, split_name: str) -> tuple[Path, Path]:
+    images_dir = split_dir / "images"
+    annotations_file = split_dir / "annotations" / f"instances_{split_name}.json"
+    if not images_dir.exists():
+        raise FileNotFoundError(f"{split_name} images directory not found: {images_dir}")
+    if not annotations_file.exists():
+        raise FileNotFoundError(f"{split_name} annotations not found: {annotations_file}")
+    return images_dir, annotations_file
 
-    update_dataset_config(args.train_dir, args.val_dir, args.config_file)
+
+def main() -> None:
+    args = parse_args()
+
+    config_path = Path(args.config).expanduser().resolve()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    train_dir = Path(args.train_dir).expanduser().resolve()
+    val_dir = Path(args.val_dir).expanduser().resolve()
+
+    train_images, train_annotations = validate_split(train_dir, "train")
+    val_images, val_annotations = validate_split(val_dir, "val")
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.indent(mapping=2, sequence=4, offset=2)
+
+    with open(config_path, "r") as f:
+        config = yaml.load(f)
+
+    train_dataset = config.get("train_dataloader", {}).get("dataset")
+    val_dataset = config.get("val_dataloader", {}).get("dataset")
+    if train_dataset is None or val_dataset is None:
+        raise KeyError("train_dataloader.dataset or val_dataloader.dataset missing from config.")
+
+    train_dataset["img_folder"] = str(train_images)
+    train_dataset["ann_file"] = str(train_annotations)
+    val_dataset["img_folder"] = str(val_images)
+    val_dataset["ann_file"] = str(val_annotations)
+
+    with open(config_path, "w") as f:
+        yaml.dump(config, f)
+
+    print("Updated dataset config:")
+    print(f"  train img_folder -> {train_images}")
+    print(f"  train ann_file   -> {train_annotations}")
+    print(f"  val img_folder   -> {val_images}")
+    print(f"  val ann_file     -> {val_annotations}")
 
 
 if __name__ == "__main__":

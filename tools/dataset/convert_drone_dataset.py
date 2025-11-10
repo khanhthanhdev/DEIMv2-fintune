@@ -1,372 +1,373 @@
 #!/usr/bin/env python3
 """
-Drone Video to COCO Dataset Converter for DEIMv2
+Convert the custom drone dataset (videos + frame-level annotations) to COCO format.
 
-This script converts drone video datasets with frame-level annotations
-to COCO format compatible with DEIMv2 training.
-
-Usage:
-    python convert_drone_dataset.py --input_dir /path/to/train --output_dir /path/to/coco_dataset
+Example:
+    python tools/dataset/convert_drone_dataset.py \
+        --input_dir /home/25thanh.tk/DEIMv2/train \
+        --output_dir coco_dataset/coco_dataset
 """
 
-import os
-import json
+from __future__ import annotations
+
 import argparse
-import cv2
-from pathlib import Path
-from tqdm import tqdm
+import json
 import shutil
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import cv2
+from tqdm import tqdm
 
 
-class DroneToCocoConverter:
-    def __init__(self, input_dir, output_dir):
-        self.input_dir = Path(input_dir)
-        self.output_dir = Path(output_dir)
-        self.images_dir = self.output_dir / "images"
-        self.annotations_dir = self.output_dir / "annotations"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Convert drone videos and annotations to COCO detection format."
+    )
+    parser.add_argument(
+        "--input_dir",
+        required=True,
+        help="Path to dataset root containing `samples/` and `annotations/annotations.json`.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        required=True,
+        help="Directory where the COCO-style dataset will be written.",
+    )
+    parser.add_argument(
+        "--annotations_file",
+        help="Optional annotations JSON path. Defaults to <input_dir>/annotations/annotations.json.",
+    )
+    parser.add_argument(
+        "--video_filename",
+        default="drone_video.mp4",
+        help="Video filename inside each sample directory.",
+    )
+    parser.add_argument(
+        "--frame_dir_name",
+        default="frames",
+        help="Folder name that may contain pre-extracted frames inside each sample.",
+    )
+    parser.add_argument(
+        "--image_extension",
+        default=".jpg",
+        choices=[".jpg", ".png"],
+        help="Image extension for extracted frames.",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=25.0,
+        help="Video FPS (used only for storing timestamps in the COCO metadata).",
+    )
+    parser.add_argument(
+        "--min_box_area",
+        type=float,
+        default=4.0,
+        help="Minimum bbox area (in pixels^2) to keep after conversion.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Remove the existing output directory before writing new data.",
+    )
+    parser.add_argument(
+        "--skip_existing",
+        action="store_true",
+        help="Reuse previously extracted frames when they already exist in output_dir.",
+    )
+    parser.add_argument(
+        "--max_videos",
+        type=int,
+        help="Debug option to limit how many videos are processed.",
+    )
+    return parser.parse_args()
 
-        # Create output directories
-        self.images_dir.mkdir(parents=True, exist_ok=True)
-        self.annotations_dir.mkdir(parents=True, exist_ok=True)
 
-        # COCO dataset structure - 7 classes for ground object detection
-        self.category_mapping = {
-            'Backpack': 1,
-            'Jacket': 2,
-            'Laptop': 3,
-            'Lifering': 4,
-            'MobilePhone': 5,
-            'Person1': 6,
-            'WaterBottle': 7
-        }
-        
-        self.coco_data = {
-            "images": [],
-            "annotations": [],
-            "categories": [
-                {"id": 1, "name": "Backpack", "supercategory": "ground_object"},
-                {"id": 2, "name": "Jacket", "supercategory": "ground_object"},
-                {"id": 3, "name": "Laptop", "supercategory": "ground_object"},
-                {"id": 4, "name": "Lifering", "supercategory": "ground_object"},
-                {"id": 5, "name": "MobilePhone", "supercategory": "ground_object"},
-                {"id": 6, "name": "Person1", "supercategory": "ground_object"},
-                {"id": 7, "name": "WaterBottle", "supercategory": "ground_object"}
-            ]
-        }
+def infer_category(video_id: str) -> str:
+    if "_" not in video_id:
+        return video_id
+    return video_id.rsplit("_", 1)[0]
 
-        self.image_id = 0
-        self.annotation_id = 0
 
-    def load_annotations(self):
-        """Load the custom annotation file"""
-        annotations_file = self.input_dir / "annotations" / "annotations.json"
-        print(f"Loading annotations from: {annotations_file}")
-        with open(annotations_file, 'r') as f:
-            data = json.load(f)
-        print(f"Loaded annotations: {type(data)}")
-        if isinstance(data, dict):
-            print(f"Keys: {list(data.keys())}")
-        elif isinstance(data, list):
-            print(f"Length: {len(data)}")
-        return data
+def find_video_file(sample_dir: Path, preferred_name: str) -> Optional[Path]:
+    preferred = sample_dir / preferred_name
+    if preferred.exists():
+        return preferred
+    mp4_files = list(sample_dir.glob("*.mp4"))
+    if len(mp4_files) == 1:
+        return mp4_files[0]
+    return None
 
-    def extract_frames_from_video(self, video_path, frame_numbers):
-        """Extract specific frames from video"""
+
+def find_preextracted_frame(frames_dir: Path, frame_idx: int) -> Optional[Path]:
+    patterns = [
+        f"frame_{frame_idx}.jpg",
+        f"frame_{frame_idx}.png",
+        f"frame_{frame_idx:05d}.jpg",
+        f"frame_{frame_idx:05d}.png",
+        f"frame_{frame_idx:06d}.jpg",
+        f"frame_{frame_idx:06d}.png",
+    ]
+    for pattern in patterns:
+        candidate = frames_dir / pattern
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def prepare_output_dir(out_dir: Path, overwrite: bool) -> None:
+    if out_dir.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"{out_dir} already exists. Use --overwrite to replace its contents."
+            )
+        shutil.rmtree(out_dir)
+    (out_dir / "images").mkdir(parents=True, exist_ok=True)
+    (out_dir / "annotations").mkdir(parents=True, exist_ok=True)
+
+
+def gather_frames(record: Dict) -> List[int]:
+    frames = set()
+    for ann in record.get("annotations", []):
+        for box in ann.get("bboxes", []):
+            frame = box.get("frame")
+            if frame is None:
+                continue
+            frames.add(int(frame))
+    return sorted(frames)
+
+
+def extract_frames(
+    video_path: Optional[Path],
+    frames_dir: Optional[Path],
+    frames_needed: List[int],
+    out_images_root: Path,
+    video_id: str,
+    image_extension: str,
+    skip_existing: bool,
+) -> Dict[int, Tuple[Path, int, int]]:
+    """Extract or copy the requested frames and return metadata keyed by frame index."""
+
+    results: Dict[int, Tuple[Path, int, int]] = {}
+    if not frames_needed:
+        return results
+
+    dest_dir = out_images_root / video_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    cap = None
+    if video_path is not None:
         cap = cv2.VideoCapture(str(video_path))
-
         if not cap.isOpened():
-            print(f"Error opening video: {video_path}")
-            return []
+            raise RuntimeError(f"Could not open video file: {video_path}")
 
-        extracted_frames = []
-        fps = cap.get(cv2.CAP_PROP_FPS)
+    for frame_idx in frames_needed:
+        file_name = f"{video_id}_frame_{frame_idx:06d}{image_extension}"
+        rel_path = Path(video_id) / file_name
+        out_path = out_images_root / rel_path
 
-        for frame_num in frame_numbers:
-            # Convert frame number to time (assuming 25 fps as mentioned)
-            time_sec = frame_num / 25.0
-            cap.set(cv2.CAP_PROP_POS_MSEC, time_sec * 1000)
-
-            ret, frame = cap.read()
-            if ret:
-                frame_filename = f"{video_path.stem}_frame_{frame_num:06d}.jpg"
-                frame_path = self.images_dir / frame_filename
-                cv2.imwrite(str(frame_path), frame)
-                extracted_frames.append((frame_num, frame_path, frame.shape))
+        if skip_existing and out_path.exists():
+            image = cv2.imread(str(out_path))
+            if image is None:
+                out_path.unlink()
             else:
-                print(f"Failed to extract frame {frame_num} from {video_path}")
+                h, w = image.shape[:2]
+                results[frame_idx] = (rel_path, w, h)
+                continue
 
+        copied = False
+        if frames_dir and frames_dir.exists():
+            src = find_preextracted_frame(frames_dir, frame_idx)
+            if src is not None:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, out_path)
+                image = cv2.imread(str(out_path))
+                if image is not None:
+                    h, w = image.shape[:2]
+                    results[frame_idx] = (rel_path, w, h)
+                    copied = True
+                else:
+                    out_path.unlink(missing_ok=True)
+
+        if copied:
+            continue
+
+        if cap is None:
+            raise RuntimeError(
+                f"No video available for {video_id} and no pre-extracted frames found."
+            )
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        success, frame = cap.read()
+        if not success or frame is None:
+            print(f"[WARN] Could not read frame {frame_idx} from {video_id}")
+            continue
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(out_path), frame):
+            print(f"[WARN] Failed to save frame {frame_idx} for {video_id}")
+            continue
+        h, w = frame.shape[:2]
+        results[frame_idx] = (rel_path, w, h)
+
+    if cap is not None:
         cap.release()
-        return extracted_frames
 
-    def find_existing_frames(self, frames_dir, frame_numbers, video_id):
-        """Find existing frame files in the frames directory"""
-        print(f"Looking for frames in: {frames_dir}")
-        print(f"Annotation frame numbers: {frame_numbers}")
+    return results
 
-        existing_frames = []
 
-        # Get all frame files in the directory
-        frame_files = list(frames_dir.glob("*.jpg")) + list(frames_dir.glob("*.png")) + list(frames_dir.glob("*.jpeg"))
-        print(f"Found {len(frame_files)} frame files in directory")
+def clip_bbox(x1: float, y1: float, x2: float, y2: float, width: int, height: int) -> Optional[Tuple[float, float, float, float]]:
+    x1 = max(0.0, min(float(x1), width - 1))
+    y1 = max(0.0, min(float(y1), height - 1))
+    x2 = max(0.0, min(float(x2), width))
+    y2 = max(0.0, min(float(y2), height))
+    w = max(0.0, x2 - x1)
+    h = max(0.0, y2 - y1)
+    if w <= 0 or h <= 0:
+        return None
+    return x1, y1, w, h
 
-        # Extract frame numbers from filenames
-        available_frames = {}
-        for frame_file in frame_files:
-            # Try to extract frame number from filename
-            filename = frame_file.name
-            # Look for patterns like frame_XXXX.jpg or frame_XXXX.png
-            if 'frame_' in filename:
-                try:
-                    # Extract number after 'frame_'
-                    parts = filename.split('frame_')[1]
-                    frame_num = int(parts.split('.')[0])  # Remove extension
-                    available_frames[frame_num] = frame_file
-                except (ValueError, IndexError):
-                    continue
 
-        print(f"Available frame numbers from files: {sorted(available_frames.keys())}")
+def main() -> None:
+    args = parse_args()
 
-        # For each annotation frame number, find the closest available frame
-        # This handles cases where annotation frame numbers don't exactly match file frame numbers
-        for target_frame in frame_numbers:
-            # Find the closest frame number that's available
-            closest_frame = None
-            min_diff = float('inf')
+    input_dir = Path(args.input_dir).expanduser().resolve()
+    samples_dir = input_dir / "samples"
+    annotations_path = (
+        Path(args.annotations_file).expanduser().resolve()
+        if args.annotations_file
+        else input_dir / "annotations" / "annotations.json"
+    )
 
-            for available_frame_num in available_frames.keys():
-                diff = abs(available_frame_num - target_frame)
-                if diff < min_diff:
-                    min_diff = diff
-                    closest_frame = available_frame_num
+    if not samples_dir.exists():
+        raise FileNotFoundError(f"Samples directory not found: {samples_dir}")
+    if not annotations_path.exists():
+        raise FileNotFoundError(f"Annotations file not found: {annotations_path}")
 
-            if closest_frame is not None and min_diff <= 10:  # Allow small differences
-                frame_path = available_frames[closest_frame]
-                print(f"Using frame {closest_frame} for annotation frame {target_frame} (diff: {min_diff})")
+    with open(annotations_path, "r") as f:
+        annotations_data = json.load(f)
+    if not isinstance(annotations_data, list):
+        raise ValueError("annotations.json should contain a list of video records.")
 
-                # Read image to get dimensions
-                img = cv2.imread(str(frame_path))
-                if img is not None:
-                    height, width = img.shape[:2]
-                    # Copy frame to output directory
-                    output_frame_path = self.images_dir / f"{video_id}_frame_{target_frame:06d}.jpg"
-                    shutil.copy2(frame_path, output_frame_path)
-                    existing_frames.append((target_frame, output_frame_path, (height, width, 3)))
-                else:
-                    print(f"Failed to read frame: {frame_path}")
-            else:
-                print(f"No suitable frame found for annotation frame {target_frame}")
+    if args.max_videos:
+        annotations_data = annotations_data[: args.max_videos]
 
-        print(f"Total frames matched: {len(existing_frames)}")
-        return existing_frames
+    out_dir = Path(args.output_dir).expanduser().resolve()
+    prepare_output_dir(out_dir, args.overwrite)
+    out_images_root = out_dir / "images"
+    annotations_out_path = out_dir / "annotations" / "instances.json"
 
-    def convert_bbox_format(self, bbox, img_width, img_height):
-        """Convert bbox from (x1,y1,x2,y2) to COCO format (x,y,width,height)"""
-        x1, y1, x2, y2 = bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2']
+    categories = sorted({infer_category(item["video_id"]) for item in annotations_data})
+    category_map = {name: idx + 1 for idx, name in enumerate(categories)}
 
-        # Ensure coordinates are within image bounds
-        x1 = max(0, min(x1, img_width))
-        y1 = max(0, min(y1, img_height))
-        x2 = max(0, min(x2, img_width))
-        y2 = max(0, min(y2, img_height))
+    coco_images: List[Dict] = []
+    coco_annotations: List[Dict] = []
+    processed_videos: List[str] = []
+    image_id = 1
+    annotation_id = 1
+    skipped_frames = 0
+    skipped_bboxes = 0
 
-        width = x2 - x1
-        height = y2 - y1
+    for record in tqdm(annotations_data, desc="Processing videos"):
+        video_id = record["video_id"]
+        sample_dir = samples_dir / video_id
+        video_path = find_video_file(sample_dir, args.video_filename)
+        frames_dir = sample_dir / args.frame_dir_name
+        if video_path is None and not frames_dir.exists():
+            print(f"[WARN] No video or frames directory found for {video_id}, skipping.")
+            continue
 
-        return [x1, y1, width, height]
+        frames_needed = gather_frames(record)
+        frame_metadata = extract_frames(
+            video_path,
+            frames_dir if frames_dir.exists() else None,
+            frames_needed,
+            out_images_root,
+            video_id,
+            args.image_extension,
+            args.skip_existing,
+        )
+        if not frame_metadata:
+            print(f"[WARN] No frames extracted for {video_id}, skipping annotations.")
+            continue
 
-    def process_video(self, video_id, annotations):
-        """Process a single video and its annotations"""
-        video_path = None
-        frames_dir = None
+        processed_videos.append(video_id)
 
-        print(f"Looking for video_id: {video_id}")
-
-        # Find the video file or frames directory
-        sample_dirs = list((self.input_dir / "samples").iterdir())
-        print(f"Available sample directories: {[d.name for d in sample_dirs if d.is_dir()]}")
-
-        for sample_dir in sample_dirs:
-            if sample_dir.is_dir():
-                print(f"Checking directory: {sample_dir.name}")
-                # More flexible matching - check if video_id is contained in directory name
-                if video_id in sample_dir.name or sample_dir.name in video_id:
-                    print(f"Found matching directory: {sample_dir.name}")
-
-                    # Priority: Check for frames directory first, then video file
-                    frames_dir_check = sample_dir / "frames"
-                    if frames_dir_check.exists() and frames_dir_check.is_dir():
-                        frames_dir = frames_dir_check
-                        print(f"Found frames directory: {frames_dir}")
-                        break
-
-                    # Check for video file
-                    video_file = sample_dir / "drone_video.mp4"
-                    if video_file.exists():
-                        video_path = video_file
-                        print(f"Found video file: {video_path}")
-                        break
-
-        if not video_path and not frames_dir:
-            print(f"No video file or frames directory found for {video_id}")
-            return
-
-        print(f"Processing: {video_path or frames_dir}")
-
-        # Collect all frame numbers that have annotations
-        frame_numbers = set()
-        for annotation_group in annotations:
-            print(f"Processing annotation group: {annotation_group}")
-            if 'bboxes' in annotation_group:
-                for bbox in annotation_group['bboxes']:
-                    frame_num = bbox.get('frame')
-                    if frame_num is not None:
-                        frame_numbers.add(frame_num)
-                        print(f"Found frame number: {frame_num}, bbox: {bbox}")
-
-        frame_numbers = sorted(list(frame_numbers))
-        print(f"Total unique frame numbers to process: {len(frame_numbers)}")
-        print(f"Frame numbers: {frame_numbers}")
-
-        if not frame_numbers:
-            print("No frame numbers found in annotations!")
-            return
-
-        if video_path:
-            # Extract frames from video
-            print(f"Extracting {len(frame_numbers)} frames from video: {frame_numbers}")
-            extracted_frames = self.extract_frames_from_video(video_path, frame_numbers)
-        elif frames_dir:
-            # Try to find existing frames
-            print(f"Trying to find existing frames in: {frames_dir}")
-            extracted_frames = self.find_existing_frames(frames_dir, frame_numbers, video_id)
-
-            # If no frames found, try to extract from video if it exists
-            if not extracted_frames:
-                video_file = frames_dir.parent / "drone_video.mp4"
-                if video_file.exists():
-                    print(f"No existing frames found, extracting from video: {video_file}")
-                    extracted_frames = self.extract_frames_from_video(video_file, frame_numbers)
-                else:
-                    print(f"No frames found and no video file available for {video_id}")
-        else:
-            print(f"No video file or frames directory found for {video_id}")
-            return
-
-        # Create frame to image mapping
-        frame_to_image = {}
-        current_width, current_height = None, None
-        for frame_num, frame_path, (height, width, _) in extracted_frames:
-            # Note: cv2 returns (height, width, channels), but COCO expects width, height
-            current_width, current_height = width, height
-            self.image_id += 1
-            image_info = {
-                "id": self.image_id,
-                "file_name": frame_path.name,
-                "height": height,
-                "width": width,
-                "frame_number": frame_num,
-                "video_id": video_id
-            }
-            self.coco_data["images"].append(image_info)
-            frame_to_image[frame_num] = self.image_id
-
-        # Convert annotations
-        for annotation_group in annotations:
-            for bbox in annotation_group['bboxes']:
-                frame_num = bbox['frame']
-                if frame_num not in frame_to_image:
-                    continue
-
-                image_id = frame_to_image[frame_num]
-                coco_bbox = self.convert_bbox_format(bbox, current_width, current_height)
-
-                # Skip invalid bboxes
-                if coco_bbox[2] <= 0 or coco_bbox[3] <= 0:
-                    continue
-
-                # Get category_id from bbox annotation or map from video_id prefix
-                category_id = bbox.get('category_id', None)
-                
-                if category_id is None:
-                    # Extract category from video_id (e.g., "Backpack_0" -> "Backpack")
-                    video_prefix = video_id.split('_')[0]  # Get part before first underscore
-                    category_id = self.category_mapping.get(video_prefix, 1)  # Default to 1 if not found
-                
-                # Ensure category_id is valid (1-7)
-                category_id = max(1, min(7, int(category_id)))
-
-                annotation = {
-                    "id": self.annotation_id,
-                    "image_id": image_id,
-                    "category_id": category_id,
-                    "bbox": coco_bbox,
-                    "area": coco_bbox[2] * coco_bbox[3],
-                    "iscrowd": 0,
-                    "frame_number": frame_num,
-                    "video_id": video_id
+        for frame_idx, (rel_path, width, height) in frame_metadata.items():
+            coco_images.append(
+                {
+                    "id": image_id,
+                    "file_name": str(rel_path).replace("\\", "/"),
+                    "width": width,
+                    "height": height,
+                    "video_id": video_id,
+                    "frame_index": frame_idx,
+                    "timestamp": round(frame_idx / args.fps, 3),
                 }
+            )
+            frame_metadata[frame_idx] = (rel_path, width, height, image_id)
+            image_id += 1
 
-                self.coco_data["annotations"].append(annotation)
-                self.annotation_id += 1
+        cat_id = category_map[infer_category(video_id)]
+        for ann in record.get("annotations", []):
+            for box in ann.get("bboxes", []):
+                frame_idx = box.get("frame")
+                if frame_idx not in frame_metadata:
+                    skipped_frames += 1
+                    continue
+                rel_path, width, height, img_id = frame_metadata[frame_idx]
+                clipped = clip_bbox(
+                    box.get("x1", 0),
+                    box.get("y1", 0),
+                    box.get("x2", width),
+                    box.get("y2", height),
+                    width,
+                    height,
+                )
+                if clipped is None:
+                    skipped_bboxes += 1
+                    continue
+                x, y, w, h = clipped
+                area = round(w * h, 3)
+                if area < args.min_box_area:
+                    skipped_bboxes += 1
+                    continue
+                coco_annotations.append(
+                    {
+                        "id": annotation_id,
+                        "image_id": img_id,
+                        "category_id": cat_id,
+                        "bbox": [round(x, 3), round(y, 3), round(w, 3), round(h, 3)],
+                        "area": area,
+                        "iscrowd": 0,
+                        "video_id": video_id,
+                        "frame_index": frame_idx,
+                    }
+                )
+                annotation_id += 1
 
-    def convert(self):
-        """Main conversion function"""
-        print("Loading annotations...")
-        annotations_data = self.load_annotations()
+    coco_dataset = {
+        "images": coco_images,
+        "annotations": coco_annotations,
+        "categories": [
+            {"id": cid, "name": name} for name, cid in category_map.items()
+        ],
+        "videos": [{"id": idx + 1, "name": name} for idx, name in enumerate(processed_videos)],
+    }
 
-        print(f"Raw annotations data type: {type(annotations_data)}")
-        print(f"Raw annotations keys: {annotations_data.keys() if isinstance(annotations_data, dict) else 'Not a dict'}")
+    with open(annotations_out_path, "w") as f:
+        json.dump(coco_dataset, f, indent=2)
 
-        # Handle both single video object and list of video objects
-        if isinstance(annotations_data, dict):
-            # Single video object
-            video_list = [annotations_data]
-            print("Found 1 video annotation (single object format)")
-        elif isinstance(annotations_data, list):
-            # List of video objects
-            video_list = annotations_data
-            print(f"Found {len(video_list)} video annotations (list format)")
-        else:
-            raise ValueError("Invalid annotations format. Expected dict or list.")
+    print("\n=== Conversion Summary ===")
+    print(f"Videos processed : {len(coco_dataset['videos'])}")
+    print(f"Images written   : {len(coco_images)}")
+    print(f"Annotations kept : {len(coco_annotations)}")
+    if skipped_frames:
+        print(f"Frames skipped   : {skipped_frames}")
+    if skipped_bboxes:
+        print(f"BBoxes skipped   : {skipped_bboxes}")
+    print(f"Output directory : {out_dir}")
 
-        # Process each video
-        for video_data in tqdm(video_list, desc="Processing videos"):
-            if not isinstance(video_data, dict):
-                print(f"Warning: Skipping invalid video data: {video_data}")
-                continue
-
-            video_id = video_data.get('video_id')
-            if not video_id:
-                print(f"Warning: Skipping video data without video_id: {video_data}")
-                continue
-
-            print(f"Processing video_id: {video_id}")
-            print(f"Full video_data: {video_data}")
-            video_annotations = video_data.get('annotations', [])
-            print(f"Found {len(video_annotations)} annotation groups for {video_id}")
-            self.process_video(video_id, video_annotations)
-
-        # Save COCO annotations
-        output_file = self.annotations_dir / "instances_train.json"
-        with open(output_file, 'w') as f:
-            json.dump(self.coco_data, f, indent=2)
-
-        print(f"Conversion complete!")
-        print(f"Images saved to: {self.images_dir}")
-        print(f"Annotations saved to: {output_file}")
-        print(f"Total images: {len(self.coco_data['images'])}")
-        print(f"Total annotations: {len(self.coco_data['annotations'])}")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Convert drone video dataset to COCO format")
-    parser.add_argument("--input_dir", required=True, help="Input directory containing train/ folder")
-    parser.add_argument("--output_dir", required=True, help="Output directory for COCO dataset")
-
-    args = parser.parse_args()
-
-    converter = DroneToCocoConverter(args.input_dir, args.output_dir)
-    converter.convert()
 
 if __name__ == "__main__":
     main()

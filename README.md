@@ -241,7 +241,7 @@ To train on your custom dataset, you need to organize it in the COCO format. Fol
       type: CocoEvaluator
       iou_types: ['bbox', ]
 
-    num_classes: 777 # your dataset classes
+    num_classes: 7 # set to your dataset classes (7 for the drone challenge)
     remap_mscoco_category: False
 
     train_dataloader:

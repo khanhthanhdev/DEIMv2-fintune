@@ -55,7 +55,46 @@ python tools/dataset/convert_drone_dataset.py \
 - Converts annotations to COCO format
 - Shows conversion statistics
 
-## Step 3: Split Dataset into Train/Validation
+## Step 3: Prepare Your Custom Dataset (7 Labels)
+
+### 3.1 Dataset Structure (COCO Layout)
+
+After running the conversion script you should organize the extracted frames and labels into COCO format:
+
+```
+dataset/
+├── images/
+│   ├── train/
+│   └── val/
+└── annotations/
+    ├── instances_train.json
+    └── instances_val.json
+```
+
+In this project the default location is `coco_dataset/` (for the combined set) plus `coco_dataset_train/` and `coco_dataset_val/` after splitting. Each image folder will contain seven categories (Backpack, Jacket, Laptop, Lifering, MobilePhone, Person1, WaterBottle) derived from the `train/samples/*` prefixes. Keep the unlabeled `public_test/` split untouched—it is meant for leaderboard submission once ground-truth is released.
+
+### 3.2 Custom Dataset Configuration
+
+Update your dataset configuration so that DEIMv2 knows about the seven labels and the COCO paths:
+
+```yaml
+num_classes: 7
+remap_mscoco_category: False
+
+train_dataloader:
+  dataset:
+    img_folder: /ABS/PATH/TO/coco_dataset_train/images
+    ann_file: /ABS/PATH/TO/coco_dataset_train/annotations/instances_train.json
+
+val_dataloader:
+  dataset:
+    img_folder: /ABS/PATH/TO/coco_dataset_val/images
+    ann_file: /ABS/PATH/TO/coco_dataset_val/annotations/instances_val.json
+```
+
+Use `python tools/dataset/update_dataset_paths.py --train_dir ... --val_dir ...` to keep these paths in sync after every split.
+
+## Step 4: Split Dataset into Train/Validation
 
 Split the converted dataset:
 
@@ -71,7 +110,7 @@ python tools/dataset/split_dataset.py \
 - Creates `coco_dataset/coco_dataset_val/`
 - Maintains video-level separation
 
-## Step 4: Update Dataset Configuration
+## Step 5: Update Dataset Configuration
 
 Update the dataset paths in the configuration:
 
@@ -82,7 +121,7 @@ python tools/dataset/update_dataset_paths.py \
     --val_dir coco_dataset/coco_dataset_val
 ```
 
-## Step 5: Validate Dataset Setup
+## Step 6: Validate Dataset Setup
 
 Validate your dataset configuration:
 
@@ -97,7 +136,7 @@ python tools/dataset/validate_dataset.py \
 - Shows image and annotation counts
 - No errors or warnings
 
-## Step 6: Start Fine-tuning
+## Step 7: Start Fine-tuning
 
 ### Multi-GPU Training (Recommended)
 ```bash
@@ -110,7 +149,7 @@ CUDA_VISIBLE_DEVICES=6,7 torchrun --master_port=7777 --nproc_per_node=2 train.py
 python train.py -c configs/deimv2/deimv2_dinov3_l_drone_finetune.yml --use-amp --seed=0
 ```
 
-## Step 7: Monitor Training
+## Step 8: Monitor Training
 
 ### View Training Logs
 ```bash
@@ -126,7 +165,7 @@ tensorboard --logdir outputs/deimv2_dinov3_l_drone_finetune
 # Access at: http://localhost:6006
 ```
 
-## Step 8: Evaluate Trained Model
+## Step 9: Evaluate Trained Model
 
 After training completes, evaluate your model:
 

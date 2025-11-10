@@ -1,107 +1,108 @@
 # Drone Dataset Conversion for DEIMv2
 
-This guide explains how to convert your drone video dataset with frame-level annotations to COCO format for training DEIMv2.
+This folder contains helper scripts that turn the raw drone challenge data (videos + bounding boxes) into a COCO-style dataset that can be used for fine-tuning DEIMv2.
 
-## Dataset Structure
-
-Your original dataset should be organized as:
+## Raw Input Structure
 
 ```
 train/
 ├── samples/
-│   ├── drone_video_001/
+│   ├── Backpack_0/
 │   │   ├── object_images/
-│   │   │   ├── img_1.jpg
-│   │   │   ├── img_2.jpg
-│   │   │   └── img_3.jpg
 │   │   └── drone_video.mp4
 │   └── ...
 └── annotations/
     └── annotations.json
+
+public_test/
+└── samples/
+    └── ...
 ```
 
-## Step 1: Install Dependencies
+- `train/` contains 7 semantic labels (Backpack, Jacket, Laptop, Lifering, MobilePhone, Person1, WaterBottle). Each subfolder bundles its reference images and a 3‑5 minute drone video.
+- `public_test/` contains only videos/object references (no ground truth). Use it for inference only—the scripts below focus on the labeled `train/` split.
+
+## Step 1 — Install Dependencies
+
+All scripts rely on OpenCV, tqdm, PyYAML, and `ruamel.yaml`:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Step 2: Convert Dataset to COCO Format
+## Step 2 — Convert the Training Split to COCO
 
-Run the conversion script to extract frames and convert annotations:
+This extracts only the annotated frames and creates `instances.json` with 7 categories:
 
 ```bash
 python tools/dataset/convert_drone_dataset.py \
-    --input_dir /path/to/your/train \
-    --output_dir /path/to/coco_dataset
+  --input_dir /home/25thanh.tk/DEIMv2/train \
+  --output_dir coco_dataset/coco_dataset \
+  --overwrite
 ```
 
-This will:
-- Extract frames from videos at annotated timestamps
-- Convert bounding box format from (x1,y1,x2,y2) to COCO format (x,y,width,height)
-- Create COCO-formatted annotation files
-- Organize images in the required structure
+Key features:
 
-## Step 3: Split Dataset (Optional)
+- Works directly on MP4 files or previously extracted `frames/` directories.
+- Automatically infers the category name from the video ID prefix (`Backpack_0` → `Backpack`).
+- Clips and filters invalid bounding boxes; stores timestamps and frame indices for traceability.
 
-If you want to split the dataset into train/validation sets:
+Resulting layout:
+
+```
+coco_dataset/coco_dataset/
+├── images/
+│   ├── Backpack_0/
+│   │   ├── Backpack_0_frame_003483.jpg
+│   │   └── ...
+└── annotations/
+    └── instances.json
+```
+
+## Step 3 — Create Train/Validation Splits
+
+Split the converted dataset while keeping entire videos in a single split:
 
 ```bash
 python tools/dataset/split_dataset.py \
-    --input_dir /path/to/coco_dataset \
-    --train_ratio 0.8
+  --input_dir coco_dataset/coco_dataset \
+  --train_ratio 0.8 \
+  --overwrite
 ```
 
-This creates `coco_dataset_train/` and `coco_dataset_val/` directories.
+This produces sibling folders:
 
-## Step 4: Configure DEIMv2
-
-Update the dataset configuration in `configs/dataset/drone_detection.yml`:
-
-```yaml
-# Update paths to your dataset
-train_dataloader:
-  dataset:
-    img_folder: /path/to/coco_dataset_train/images
-    ann_file: /path/to/coco_dataset_train/annotations/instances_train.json
-
-val_dataloader:
-  dataset:
-    img_folder: /path/to/coco_dataset_val/images
-    ann_file: /path/to/coco_dataset_val/annotations/instances_val.json
+```
+coco_dataset/
+├── coco_dataset_train/
+│   ├── images/
+│   └── annotations/instances_train.json
+└── coco_dataset_val/
+    ├── images/
+    └── annotations/instances_val.json
 ```
 
-## Step 5: Update Model Configuration
+## Step 4 — Update the Dataset Config
 
-Create or modify a model configuration file (e.g., based on `deimv2_hgnetv2_s_coco.yml`):
-
-```yaml
-# Include your dataset config
-dataset: drone_detection.yml
-
-# Set num_classes to 1 (single object class)
-num_classes: 1
-```
-
-## Step 6: Train
+Inject the new paths into `configs/dataset/drone_detection.yml` (num_classes is already set to 7 and `remap_mscoco_category` is disabled):
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py \
-    -c configs/deimv2/deimv2_hgnetv2_s_coco.yml \
-    --use-amp --seed=0
+python tools/dataset/update_dataset_paths.py \
+  --train_dir coco_dataset/coco_dataset_train \
+  --val_dir coco_dataset/coco_dataset_val
 ```
 
-## Notes
+## Step 5 — Validate Before Training
 
-- The conversion script assumes 25 FPS videos (as mentioned in your dataset description)
-- Only frames with annotations are extracted to save disk space
-- Bounding boxes are validated to ensure they are within image bounds
-- The dataset uses a single category: "target_object" with ID 1
-- Video IDs and frame numbers are preserved in the COCO annotations for reference
+```bash
+python tools/dataset/validate_dataset.py --config configs/dataset/drone_detection.yml
+```
 
-## Troubleshooting
+You should see counts for images/annotations plus warnings if anything is missing.
 
-1. **Video not found**: Ensure video files are named consistently with video_id in annotations
-2. **Frame extraction fails**: Check video codec compatibility with OpenCV
-3. **Memory issues**: For large datasets, process videos individually or reduce batch size
-4. **Invalid bboxes**: The script automatically clips bboxes to image boundaries
+## Notes & Tips
+
+- **public_test**: keep it untouched for now; once ground-truth annotations are released you can rerun `convert_drone_dataset.py` on that folder as well.
+- **Re-running conversion**: pass `--overwrite` to rebuild everything or `--skip_existing` to reuse extracted frames.
+- **Performance**: on the provided dataset (~20k annotated frames) conversion takes a few minutes and uses ~6 GB of disk space for JPEGs.
+- **Custom splits**: adjust `--train_ratio`/`--seed` in `split_dataset.py` to try different train/val partitions without recomputing frames.
